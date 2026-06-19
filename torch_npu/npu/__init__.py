@@ -114,6 +114,11 @@ __all__ = [
     "ExternalEvent",
     "graph_task_group_begin",
     "graph_task_group_end",
+    "make_dual_task_group_handle",
+    "dual_stream_sync_begin",
+    "dual_stream_sync_end",
+    "dual_fused_infer_attention_score",
+    "dual_fused_infer_attention_score_update",
     "graph_task_update_begin",
     "graph_task_update_end",
     "set_device_limit",
@@ -153,6 +158,7 @@ from .autocast_utils import *  # noqa: F403
 from .backends import *  # noqa: F403
 from ._backends import *  # noqa: F403
 from .deterministic import enable_deterministic_with_backward, disable_deterministic_with_backward # noqa: F403
+from . import npugraph_ex
 
 from .graphs import (
     NPUGraph,
@@ -162,6 +168,11 @@ from .graphs import (
     make_graphed_callables,
     graph_task_group_begin,
     graph_task_group_end,
+    make_dual_task_group_handle,
+    dual_stream_sync_begin,
+    dual_stream_sync_end,
+    dual_fused_infer_attention_score,
+    dual_fused_infer_attention_score_update,
     graph_task_update_begin,
     graph_task_update_end,
 )

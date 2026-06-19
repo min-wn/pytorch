@@ -15,6 +15,8 @@ from .trace_rule import _patch_npu_trace_rules
 _global_npu_backend = None
 __all__ = []
 
+NPUGRAPH_EX_BACKEND = "npugraph_ex"
+
 
 class _TorchairImportError(Exception):
     def __init__(self):
@@ -111,13 +113,45 @@ def _get_default_backend():
     return _lazy_exec
 
 
+def _get_npugraph_ex_backend():
+    torchair_backend = None
+
+    def _lazy_exec(*args, **kwargs):
+        nonlocal torchair_backend
+
+        try:
+            import npugraph_ex
+        except ModuleNotFoundError as e:
+            if e.name != NPUGRAPH_EX_BACKEND:
+                raise
+            if torchair_backend is None:
+                if 'torchair' not in sys.modules:
+                    sys.modules['torchair'] = _LazyTorchair()
+                import torchair
+
+                config = torchair.CompilerConfig()
+                config.mode = "reduce-overhead"
+                torchair_backend = torchair.get_npu_backend(
+                    compiler_config=config)
+            return torchair_backend(*args, **kwargs)
+        else:
+            config = npugraph_ex.CompilerConfig()
+            config.mode = NPUGRAPH_EX_BACKEND
+            return npugraph_ex.get_npu_backend(compiler_config=config)(
+                *args, **kwargs)
+
+    return _lazy_exec
+
+
 _global_backend = _get_default_backend()
+_global_npugraph_ex_backend = _get_npugraph_ex_backend()
 
 
-def _register_npu_backend(backend):
-    if 'npu' in _BACKENDS.keys():
-        del _BACKENDS['npu']
-    _register_backend(backend, 'npu')
+def _register_npu_backend(backend, name="npu"):
+    if name in _BACKENDS.keys():
+        del _BACKENDS[name]
+    _register_backend(backend, name)
 
 
 _register_npu_backend(_global_backend)
+_register_npu_backend(_global_npugraph_ex_backend, NPUGRAPH_EX_BACKEND)
