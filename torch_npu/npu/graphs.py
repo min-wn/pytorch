@@ -5,6 +5,11 @@ __all__ = [
     "graph_task_group_end",
     "graph_task_update_begin",
     "graph_task_update_end",
+    "make_dual_task_group_handle",
+    "dual_stream_sync_begin",
+    "dual_stream_sync_end",
+    "dual_fused_infer_attention_score",
+    "dual_fused_infer_attention_score_update",
     "NPUGraph",
     "graph",
     "make_graphed_callables",
@@ -40,6 +45,12 @@ if not hasattr(torch_npu._C, "_NPUStreamBase"):
     )
     torch_npu._C.__dict__["_graph_task_group_begin"] = _dummy_type("_graph_task_group_begin")
     torch_npu._C.__dict__["_graph_task_group_end"] = _dummy_type("_graph_task_group_end")
+    torch_npu._C.__dict__["_make_dual_task_group_handle"] = _dummy_type("_make_dual_task_group_handle")
+    torch_npu._C.__dict__["_dual_stream_sync_begin"] = _dummy_type("_dual_stream_sync_begin")
+    torch_npu._C.__dict__["_dual_stream_sync_end"] = _dummy_type("_dual_stream_sync_end")
+    torch_npu._C.__dict__["_dual_fused_infer_attention_score"] = _dummy_type("_dual_fused_infer_attention_score")
+    torch_npu._C.__dict__["_dual_fused_infer_attention_score_update"] = _dummy_type(
+        "_dual_fused_infer_attention_score_update")
     torch_npu._C.__dict__["_graph_task_update_begin"] = _dummy_type("_graph_task_update_begin")
     torch_npu._C.__dict__["_graph_task_update_end"] = _dummy_type("_graph_task_update_end")
     torch_npu._C.__dict__["_super_kernel_scope_begin"] = _dummy_type("_super_kernel_scope_begin")
@@ -51,6 +62,11 @@ from torch_npu._C import (  # noqa: F401
     _graph_pool_handle,
     _graph_task_group_begin,
     _graph_task_group_end,
+    _make_dual_task_group_handle,
+    _dual_stream_sync_begin,
+    _dual_stream_sync_end,
+    _dual_fused_infer_attention_score,
+    _dual_fused_infer_attention_score_update,
     _graph_task_update_begin,
     _graph_task_update_end,
     _super_kernel_scope_begin,
@@ -84,6 +100,190 @@ def graph_task_group_begin(stream):
 
 def graph_task_group_end(stream):
     return _graph_task_group_end(stream)
+
+
+def make_dual_task_group_handle(primary, secondary):
+    return _make_dual_task_group_handle(primary, secondary)
+
+
+def dual_stream_sync_begin(main_stream, primary_stream, secondary_stream):
+    return _dual_stream_sync_begin(main_stream, primary_stream, secondary_stream)
+
+
+def dual_stream_sync_end(main_stream, primary_stream, secondary_stream, handle):
+    _dual_stream_sync_end(main_stream, primary_stream, secondary_stream, handle)
+
+
+def _as_int_list(name, value):
+    if value is None:
+        raise ValueError(f"{name} is required")
+    return [int(item) for item in value]
+
+
+def _default_dual_fia_lse(query, graph_tokens, num_heads, block_table,
+                          softmax_lse_flag):
+    if not softmax_lse_flag:
+        return torch.empty((0,), dtype=torch.float32, device=query.device)
+    heads = int(num_heads) if block_table is not None else int(query.shape[1])
+    return torch.empty((int(graph_tokens), heads, 1),
+                       dtype=torch.float32,
+                       device=query.device)
+
+
+def dual_fused_infer_attention_score(
+        main_stream,
+        primary_stream,
+        secondary_stream,
+        query,
+        key,
+        value,
+        attention_out,
+        block_table_0=None,
+        block_table_1=None,
+        actual_seq_lengths_0=None,
+        actual_seq_lengths_1=None,
+        actual_seq_lengths_kv_0=None,
+        actual_seq_lengths_kv_1=None,
+        split_start_0=0,
+        split_graph_tokens_0=None,
+        split_start_1=None,
+        split_graph_tokens_1=None,
+        *,
+        atten_mask=None,
+        workspace_0=None,
+        workspace_1=None,
+        softmax_lse_0=None,
+        softmax_lse_1=None,
+        num_heads=1,
+        scale=1.0,
+        block_size=0,
+        num_key_value_heads=0,
+        sparse_mode=3,
+        input_layout="TND",
+        pre_tokens=2147483647,
+        next_tokens=2147483647,
+        softmax_lse_flag=False):
+    if split_graph_tokens_0 is None or split_graph_tokens_1 is None:
+        raise ValueError("split_graph_tokens_0 and split_graph_tokens_1 are required")
+    if split_start_1 is None:
+        split_start_1 = int(split_start_0) + int(split_graph_tokens_0)
+    if softmax_lse_0 is None:
+        softmax_lse_0 = _default_dual_fia_lse(
+            query, split_graph_tokens_0, num_heads, block_table_0,
+            softmax_lse_flag)
+    if softmax_lse_1 is None:
+        softmax_lse_1 = _default_dual_fia_lse(
+            query, split_graph_tokens_1, num_heads, block_table_1,
+            softmax_lse_flag)
+    return _dual_fused_infer_attention_score(
+        main_stream,
+        primary_stream,
+        secondary_stream,
+        query,
+        key,
+        value,
+        atten_mask,
+        block_table_0,
+        block_table_1,
+        _as_int_list("actual_seq_lengths_0", actual_seq_lengths_0),
+        _as_int_list("actual_seq_lengths_1", actual_seq_lengths_1),
+        _as_int_list("actual_seq_lengths_kv_0", actual_seq_lengths_kv_0),
+        _as_int_list("actual_seq_lengths_kv_1", actual_seq_lengths_kv_1),
+        int(split_start_0),
+        int(split_graph_tokens_0),
+        int(split_start_1),
+        int(split_graph_tokens_1),
+        workspace_0,
+        workspace_1,
+        attention_out,
+        softmax_lse_0,
+        softmax_lse_1,
+        int(num_heads),
+        float(scale),
+        int(block_size),
+        int(num_key_value_heads),
+        int(sparse_mode),
+        str(input_layout),
+        int(pre_tokens),
+        int(next_tokens),
+        bool(softmax_lse_flag))
+
+
+def dual_fused_infer_attention_score_update(
+        update_stream,
+        handle,
+        query,
+        key,
+        value,
+        attention_out,
+        block_table_0=None,
+        block_table_1=None,
+        actual_seq_lengths_0=None,
+        actual_seq_lengths_1=None,
+        actual_seq_lengths_kv_0=None,
+        actual_seq_lengths_kv_1=None,
+        split_start_0=0,
+        split_graph_tokens_0=None,
+        split_start_1=None,
+        split_graph_tokens_1=None,
+        *,
+        atten_mask=None,
+        workspace_0=None,
+        workspace_1=None,
+        softmax_lse_0=None,
+        softmax_lse_1=None,
+        num_heads=1,
+        scale=1.0,
+        block_size=0,
+        num_key_value_heads=0,
+        sparse_mode=3,
+        input_layout="TND",
+        pre_tokens=2147483647,
+        next_tokens=2147483647,
+        softmax_lse_flag=False):
+    if split_graph_tokens_0 is None or split_graph_tokens_1 is None:
+        raise ValueError("split_graph_tokens_0 and split_graph_tokens_1 are required")
+    if split_start_1 is None:
+        split_start_1 = int(split_start_0) + int(split_graph_tokens_0)
+    if softmax_lse_0 is None:
+        softmax_lse_0 = _default_dual_fia_lse(
+            query, split_graph_tokens_0, num_heads, block_table_0,
+            softmax_lse_flag)
+    if softmax_lse_1 is None:
+        softmax_lse_1 = _default_dual_fia_lse(
+            query, split_graph_tokens_1, num_heads, block_table_1,
+            softmax_lse_flag)
+    _dual_fused_infer_attention_score_update(
+        update_stream,
+        handle,
+        query,
+        key,
+        value,
+        atten_mask,
+        block_table_0,
+        block_table_1,
+        _as_int_list("actual_seq_lengths_0", actual_seq_lengths_0),
+        _as_int_list("actual_seq_lengths_1", actual_seq_lengths_1),
+        _as_int_list("actual_seq_lengths_kv_0", actual_seq_lengths_kv_0),
+        _as_int_list("actual_seq_lengths_kv_1", actual_seq_lengths_kv_1),
+        int(split_start_0),
+        int(split_graph_tokens_0),
+        int(split_start_1),
+        int(split_graph_tokens_1),
+        workspace_0,
+        workspace_1,
+        attention_out,
+        softmax_lse_0,
+        softmax_lse_1,
+        int(num_heads),
+        float(scale),
+        int(block_size),
+        int(num_key_value_heads),
+        int(sparse_mode),
+        str(input_layout),
+        int(pre_tokens),
+        int(next_tokens),
+        bool(softmax_lse_flag))
 
 
 def graph_task_update_begin(stream, handle):

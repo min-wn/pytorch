@@ -3,12 +3,18 @@
 #include <ATen/Tensor.h>
 #include <c10/core/Device.h>
 #include <c10/util/flat_hash_map.h>
+#include <c10/util/Optional.h>
+#include <memory>
+#include <string>
+#include <tuple>
+#include <vector>
 
 #include "third_party/acl/inc/acl/acl_base.h"
 #include "third_party/acl/inc/acl/acl_rt.h"
 #include "third_party/acl/inc/acl/super_kernel.h"
 #include "torch_npu/csrc/core/npu/interface/SkInterface.h"
 #include "torch_npu/csrc/core/npu/NPUGraphsUtils.h"
+#include "torch_npu/csrc/core/npu/NPUEvent.h"
 #include "torch_npu/csrc/core/npu/NPUMacros.h"
 #include "torch_npu/csrc/core/npu/NPUStream.h"
 
@@ -29,8 +35,96 @@ struct TORCH_NPU_API NPUTaskGroupHandle {
     aclrtTaskGrp task_group;
 };
 
+struct TORCH_NPU_API DualTaskGroupHandle {
+    NPUTaskGroupHandle primary;
+    NPUTaskGroupHandle secondary;
+};
+
+struct TORCH_NPU_API DualStreamSyncHandle {
+    DualStreamSyncHandle();
+
+    NPUEvent fork_event;
+    NPUEvent primary_done_event;
+    NPUEvent secondary_done_event;
+};
+
 typedef TORCH_NPU_API void (*NPUCallbackFunc)(void *fnData);
 
+TORCH_NPU_API DualTaskGroupHandle make_dual_task_group_handle(
+    NPUTaskGroupHandle primary,
+    NPUTaskGroupHandle secondary);
+TORCH_NPU_API std::shared_ptr<DualStreamSyncHandle> dual_stream_sync_begin(
+    c10_npu::NPUStream main_stream,
+    c10_npu::NPUStream primary_stream,
+    c10_npu::NPUStream secondary_stream);
+TORCH_NPU_API void dual_stream_sync_end(
+    c10_npu::NPUStream main_stream,
+    c10_npu::NPUStream primary_stream,
+    c10_npu::NPUStream secondary_stream,
+    const std::shared_ptr<DualStreamSyncHandle>& handle);
+TORCH_NPU_API std::tuple<at::Tensor, at::Tensor, at::Tensor> dual_fused_infer_attention_score(
+    c10_npu::NPUStream main_stream,
+    c10_npu::NPUStream primary_stream,
+    c10_npu::NPUStream secondary_stream,
+    const at::Tensor& query,
+    const at::Tensor& key,
+    const at::Tensor& value,
+    const c10::optional<at::Tensor>& atten_mask,
+    const c10::optional<at::Tensor>& block_table_0,
+    const c10::optional<at::Tensor>& block_table_1,
+    const std::vector<int64_t>& actual_seq_lengths_0,
+    const std::vector<int64_t>& actual_seq_lengths_1,
+    const std::vector<int64_t>& actual_seq_lengths_kv_0,
+    const std::vector<int64_t>& actual_seq_lengths_kv_1,
+    int64_t split_start_0,
+    int64_t split_graph_tokens_0,
+    int64_t split_start_1,
+    int64_t split_graph_tokens_1,
+    const c10::optional<at::Tensor>& workspace_0,
+    const c10::optional<at::Tensor>& workspace_1,
+    const at::Tensor& attention_out,
+    const at::Tensor& softmax_lse_0,
+    const at::Tensor& softmax_lse_1,
+    int64_t num_heads,
+    double scale,
+    int64_t block_size,
+    int64_t num_key_value_heads,
+    int64_t sparse_mode,
+    const std::string& input_layout,
+    int64_t pre_tokens,
+    int64_t next_tokens,
+    bool softmax_lse_flag);
+TORCH_NPU_API void dual_fused_infer_attention_score_update(
+    c10_npu::NPUStream update_stream,
+    DualTaskGroupHandle handle,
+    const at::Tensor& query,
+    const at::Tensor& key,
+    const at::Tensor& value,
+    const c10::optional<at::Tensor>& atten_mask,
+    const c10::optional<at::Tensor>& block_table_0,
+    const c10::optional<at::Tensor>& block_table_1,
+    const std::vector<int64_t>& actual_seq_lengths_0,
+    const std::vector<int64_t>& actual_seq_lengths_1,
+    const std::vector<int64_t>& actual_seq_lengths_kv_0,
+    const std::vector<int64_t>& actual_seq_lengths_kv_1,
+    int64_t split_start_0,
+    int64_t split_graph_tokens_0,
+    int64_t split_start_1,
+    int64_t split_graph_tokens_1,
+    const c10::optional<at::Tensor>& workspace_0,
+    const c10::optional<at::Tensor>& workspace_1,
+    const at::Tensor& attention_out,
+    const at::Tensor& softmax_lse_0,
+    const at::Tensor& softmax_lse_1,
+    int64_t num_heads,
+    double scale,
+    int64_t block_size,
+    int64_t num_key_value_heads,
+    int64_t sparse_mode,
+    const std::string& input_layout,
+    int64_t pre_tokens,
+    int64_t next_tokens,
+    bool softmax_lse_flag);
 TORCH_NPU_API void graph_task_group_begin(c10_npu::NPUStream stream);
 TORCH_NPU_API NPUTaskGroupHandle graph_task_group_end(c10_npu::NPUStream stream);
 TORCH_NPU_API void graph_task_update_begin(c10_npu::NPUStream stream, NPUTaskGroupHandle handle);

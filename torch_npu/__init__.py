@@ -66,6 +66,7 @@ from torch_npu.utils import patch_getenv
 from torch_npu.utils.utils import _is_interactive_command_line
 import torch_npu._afd
 from torch_npu import profiler
+_ENABLE_EAGER_DISTRIBUTED_INIT = os.getenv("TORCH_NPU_ENABLE_EAGER_DISTRIBUTED_INIT", "0") == "1"
 from torch_npu.npu.amp.sharded_grad_scaler import _ShardedGradScaler
 from torch_npu.contrib.function import npu_functional
 from torch_npu.contrib.module import npu_modules
@@ -77,11 +78,25 @@ from torch_npu.utils._dynamo_device import _dynamo_register_interface_for_device
 from torch_npu.npu._format import _apply_npu_format_patch
 import torch_npu.utils._afd_ops
 import torch_npu.utils.custom_ops
-import torch_npu.distributed.rpc
+from torch_npu.npu.graphs import (
+    dual_fused_infer_attention_score as npu_dual_fused_infer_attention_score,
+    dual_fused_infer_attention_score_update as npu_dual_fused_infer_attention_score_update,
+)
+__all__.append("npu_dual_fused_infer_attention_score")
+__all__.append("npu_dual_fused_infer_attention_score_update")
+if _ENABLE_EAGER_DISTRIBUTED_INIT:
+    import torch_npu.distributed.rpc
 import torch_npu.op_plugin
 from torch_npu.profiler._add_mstx_patch import _apply_mstx_patch
-from torch_npu.distributed.fsdp._add_fsdp_patch import _apply_fsdp_patch
-from torch_npu.distributed.rpc.backend_registry import _rpc_backend_registry
+if _ENABLE_EAGER_DISTRIBUTED_INIT:
+    from torch_npu.distributed.fsdp._add_fsdp_patch import _apply_fsdp_patch
+    from torch_npu.distributed.rpc.backend_registry import _rpc_backend_registry
+else:
+    def _apply_fsdp_patch():
+        return None
+
+    def _rpc_backend_registry():
+        return None
 from torch_npu.utils import _cann_package_check, _add_intercept_methods
 from torch_npu.utils import _register_ops_under_dtensor_rules
 from torch_npu.utils.exposed_api import public_npu_functions
@@ -91,7 +106,10 @@ from torch_npu.utils.hif8_tensor import _HiFloat8Tensor as HiFloat8Tensor
 from torch_npu.utils._error_code import ErrCode, pta_error, _except_handler
 from torch_npu.asd.asd import _asd_patch
 from torch_npu.asd.checksum import _matmul_checksum as matmul_checksum
-from torch_npu._C._distributed_c10d import ParallelStore
+if _ENABLE_EAGER_DISTRIBUTED_INIT:
+    from torch_npu._C._distributed_c10d import ParallelStore
+else:
+    ParallelStore = None
 from torch_npu.op_plugin.meta import _meta_registrations
 from torch_npu.dynamo import _patch_npu_trace_rules
 from torch_npu.version import __version__ as __version__
@@ -189,6 +207,8 @@ def _apply_class_patches():
 
 
 def _apply_distributed_methods_patch():
+    if not _ENABLE_EAGER_DISTRIBUTED_INIT:
+        return None
     torch._C._distributed_c10d._verify_params_across_processes = torch_npu.distributed._verify_params_across_processes
     torch.distributed.batch_isend_irecv = torch_npu.distributed.distributed_c10d._batch_isend_irecv
     torch.distributed.distributed_c10d.batch_isend_irecv = torch_npu.distributed.distributed_c10d._batch_isend_irecv
@@ -271,7 +291,8 @@ def _register_distributed_backend_for_npu():
 
 
 # init and register distributed backend
-_register_distributed_backend_for_npu()
+if _ENABLE_EAGER_DISTRIBUTED_INIT:
+    _register_distributed_backend_for_npu()
 
 
 # set default device type for gradient checkpointing
@@ -282,7 +303,8 @@ del DefaultDeviceType
 # NPU exit, need to synchronize devices
 def _npu_shutdown():
     success = torch_npu._C._npu_shutdown_synchronize()
-    torch_npu.distributed.distributed_c10d._destructor_process_group()
+    if _ENABLE_EAGER_DISTRIBUTED_INIT:
+        torch_npu.distributed.distributed_c10d._destructor_process_group()
     torch_npu._C._npu_shutdown(success)
     _except_handler.handle_exception()
     torch_npu.asd.asd.matmul_check._cleanup()

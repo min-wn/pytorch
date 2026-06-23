@@ -617,6 +617,21 @@
   "torch_npu.npu.graphs.graph_task_group_begin": {
     "signature": "(stream)"
   },
+  "torch_npu.npu.graphs.make_dual_task_group_handle": {
+    "signature": "(primary, secondary)"
+  },
+  "torch_npu.npu.graphs.dual_stream_sync_begin": {
+    "signature": "(main_stream, primary_stream, secondary_stream)"
+  },
+  "torch_npu.npu.graphs.dual_stream_sync_end": {
+    "signature": "(main_stream, primary_stream, secondary_stream, handle)"
+  },
+  "torch_npu.npu.graphs.dual_fused_infer_attention_score": {
+    "signature": "(main_stream, primary_stream, secondary_stream, query, key, value, attention_out, block_table_0=None, block_table_1=None, actual_seq_lengths_0=None, actual_seq_lengths_1=None, actual_seq_lengths_kv_0=None, actual_seq_lengths_kv_1=None, split_start_0=0, split_graph_tokens_0=None, split_start_1=None, split_graph_tokens_1=None, *, atten_mask=None, workspace_0=None, workspace_1=None, softmax_lse_0=None, softmax_lse_1=None, num_heads=1, scale=1.0, block_size=0, num_key_value_heads=0, sparse_mode=3, input_layout='TND', pre_tokens=2147483647, next_tokens=2147483647, softmax_lse_flag=False)"
+  },
+  "torch_npu.npu.graphs.dual_fused_infer_attention_score_update": {
+    "signature": "(update_stream, handle, query, key, value, attention_out, block_table_0=None, block_table_1=None, actual_seq_lengths_0=None, actual_seq_lengths_1=None, actual_seq_lengths_kv_0=None, actual_seq_lengths_kv_1=None, split_start_0=0, split_graph_tokens_0=None, split_start_1=None, split_graph_tokens_1=None, *, atten_mask=None, workspace_0=None, workspace_1=None, softmax_lse_0=None, softmax_lse_1=None, num_heads=1, scale=1.0, block_size=0, num_key_value_heads=0, sparse_mode=3, input_layout='TND', pre_tokens=2147483647, next_tokens=2147483647, softmax_lse_flag=False)"
+  },
   "torch_npu.npu.graphs.NPUGraph": {
     "signature": "()"
   },
@@ -877,6 +892,21 @@
   },
   "torch_npu.npu.graph_task_group_end": {
     "signature": "(stream)"
+  },
+  "torch_npu.npu.make_dual_task_group_handle": {
+    "signature": "(primary, secondary)"
+  },
+  "torch_npu.npu.dual_stream_sync_begin": {
+    "signature": "(main_stream, primary_stream, secondary_stream)"
+  },
+  "torch_npu.npu.dual_stream_sync_end": {
+    "signature": "(main_stream, primary_stream, secondary_stream, handle)"
+  },
+  "torch_npu.npu.dual_fused_infer_attention_score": {
+    "signature": "(main_stream, primary_stream, secondary_stream, query, key, value, attention_out, block_table_0=None, block_table_1=None, actual_seq_lengths_0=None, actual_seq_lengths_1=None, actual_seq_lengths_kv_0=None, actual_seq_lengths_kv_1=None, split_start_0=0, split_graph_tokens_0=None, split_start_1=None, split_graph_tokens_1=None, *, atten_mask=None, workspace_0=None, workspace_1=None, softmax_lse_0=None, softmax_lse_1=None, num_heads=1, scale=1.0, block_size=0, num_key_value_heads=0, sparse_mode=3, input_layout='TND', pre_tokens=2147483647, next_tokens=2147483647, softmax_lse_flag=False)"
+  },
+  "torch_npu.npu.dual_fused_infer_attention_score_update": {
+    "signature": "(update_stream, handle, query, key, value, attention_out, block_table_0=None, block_table_1=None, actual_seq_lengths_0=None, actual_seq_lengths_1=None, actual_seq_lengths_kv_0=None, actual_seq_lengths_kv_1=None, split_start_0=0, split_graph_tokens_0=None, split_start_1=None, split_graph_tokens_1=None, *, atten_mask=None, workspace_0=None, workspace_1=None, softmax_lse_0=None, softmax_lse_1=None, num_heads=1, scale=1.0, block_size=0, num_key_value_heads=0, sparse_mode=3, input_layout='TND', pre_tokens=2147483647, next_tokens=2147483647, softmax_lse_flag=False)"
   },
   "torch_npu.npu.graph_task_update_begin": {
     "signature": "(stream, handle)"
@@ -2119,6 +2149,12 @@
   },
   "torch_npu.npu_dynamic_quant_asymmetric": {
     "signature": "(input_dummy, smooth_scales=None, group_index=None, dst_type=torch.int8)"
+  },
+  "torch_npu.npu_dual_fused_infer_attention_score": {
+    "signature": "(main_stream, primary_stream, secondary_stream, query, key, value, attention_out, block_table_0=None, block_table_1=None, actual_seq_lengths_0=None, actual_seq_lengths_1=None, actual_seq_lengths_kv_0=None, actual_seq_lengths_kv_1=None, split_start_0=0, split_graph_tokens_0=None, split_start_1=None, split_graph_tokens_1=None, *, atten_mask=None, workspace_0=None, workspace_1=None, softmax_lse_0=None, softmax_lse_1=None, num_heads=1, scale=1.0, block_size=0, num_key_value_heads=0, sparse_mode=3, input_layout='TND', pre_tokens=2147483647, next_tokens=2147483647, softmax_lse_flag=False)"
+  },
+  "torch_npu.npu_dual_fused_infer_attention_score_update": {
+    "signature": "(update_stream, handle, query, key, value, attention_out, block_table_0=None, block_table_1=None, actual_seq_lengths_0=None, actual_seq_lengths_1=None, actual_seq_lengths_kv_0=None, actual_seq_lengths_kv_1=None, split_start_0=0, split_graph_tokens_0=None, split_start_1=None, split_graph_tokens_1=None, *, atten_mask=None, workspace_0=None, workspace_1=None, softmax_lse_0=None, softmax_lse_1=None, num_heads=1, scale=1.0, block_size=0, num_key_value_heads=0, sparse_mode=3, input_layout='TND', pre_tokens=2147483647, next_tokens=2147483647, softmax_lse_flag=False)"
   },
   "torch_npu.npu_group_quant": {
     "signature": "(x, scale, group_index, offset=None, dst_dtype=None)"
