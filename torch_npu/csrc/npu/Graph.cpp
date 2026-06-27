@@ -1,4 +1,5 @@
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "torch_npu/csrc/npu/Graph.h"
@@ -24,6 +25,120 @@ c10::optional<at::Tensor> optional_tensor_from_py_object(const py::object& obj)
         return c10::nullopt;
     }
     return obj.cast<at::Tensor>();
+}
+
+struct DualSplitFiaUpdateRecord {
+    c10_npu::NPUTaskGroupHandle handle;
+    c10_npu::NPUEvent* event;
+    at::Tensor query;
+    at::Tensor key;
+    at::Tensor value;
+    c10::optional<at::Tensor> atten_mask;
+    c10::optional<at::Tensor> block_table;
+    std::vector<int64_t> actual_seq_lengths;
+    std::vector<int64_t> actual_seq_lengths_kv;
+    c10::optional<at::Tensor> workspace;
+    at::Tensor attention_out;
+    at::Tensor softmax_lse;
+    int64_t num_heads;
+    double scale;
+    int64_t block_size;
+    int64_t num_key_value_heads;
+    int64_t sparse_mode;
+    std::string input_layout;
+    int64_t pre_tokens;
+    int64_t next_tokens;
+    bool softmax_lse_flag;
+};
+
+py::sequence require_py_sequence(const py::handle& obj, const char* name)
+{
+    TORCH_CHECK(PySequence_Check(obj.ptr()), name, " must be a sequence.",
+        PTA_ERROR(ErrCode::PARAM));
+    return py::reinterpret_borrow<py::sequence>(obj);
+}
+
+DualSplitFiaUpdateRecord parse_dual_split_fia_update_record(
+    const py::handle& obj,
+    const char* name)
+{
+    auto record = require_py_sequence(obj, name);
+    TORCH_CHECK(record.size() == 21, name,
+        " must contain 21 fields, but got ", record.size(),
+        PTA_ERROR(ErrCode::PARAM));
+    return DualSplitFiaUpdateRecord{
+        record[0].cast<c10_npu::NPUTaskGroupHandle>(),
+        THNPUtils_PyObject_to_NPUEvent(record[1].ptr()),
+        record[2].cast<at::Tensor>(),
+        record[3].cast<at::Tensor>(),
+        record[4].cast<at::Tensor>(),
+        optional_tensor_from_py_object(record[5]),
+        optional_tensor_from_py_object(record[6]),
+        record[7].cast<std::vector<int64_t>>(),
+        record[8].cast<std::vector<int64_t>>(),
+        optional_tensor_from_py_object(record[9]),
+        record[10].cast<at::Tensor>(),
+        record[11].cast<at::Tensor>(),
+        record[12].cast<int64_t>(),
+        record[13].cast<double>(),
+        record[14].cast<int64_t>(),
+        record[15].cast<int64_t>(),
+        record[16].cast<int64_t>(),
+        record[17].cast<std::string>(),
+        record[18].cast<int64_t>(),
+        record[19].cast<int64_t>(),
+        record[20].cast<bool>()};
+}
+
+void run_dual_split_fia_update_pair(
+    const c10_npu::NPUStream& update_stream,
+    const DualSplitFiaUpdateRecord& first,
+    const DualSplitFiaUpdateRecord& second)
+{
+    c10_npu::dual_split_fused_infer_attention_score_update(
+        update_stream,
+        first.handle,
+        first.event,
+        second.handle,
+        second.event,
+        first.query,
+        first.key,
+        first.value,
+        first.atten_mask,
+        first.block_table,
+        first.actual_seq_lengths,
+        first.actual_seq_lengths_kv,
+        first.workspace,
+        first.attention_out,
+        first.softmax_lse,
+        first.num_heads,
+        first.scale,
+        first.block_size,
+        first.num_key_value_heads,
+        first.sparse_mode,
+        first.input_layout,
+        first.pre_tokens,
+        first.next_tokens,
+        first.softmax_lse_flag,
+        second.query,
+        second.key,
+        second.value,
+        second.atten_mask,
+        second.block_table,
+        second.actual_seq_lengths,
+        second.actual_seq_lengths_kv,
+        second.workspace,
+        second.attention_out,
+        second.softmax_lse,
+        second.num_heads,
+        second.scale,
+        second.block_size,
+        second.num_key_value_heads,
+        second.sparse_mode,
+        second.input_layout,
+        second.pre_tokens,
+        second.next_tokens,
+        second.softmax_lse_flag);
 }
 
 void *process_callback(void *arg)
@@ -310,6 +425,127 @@ void TORCH_NPU_API THNPGraph_init(PyObject* module) {
                 pre_tokens,
                 next_tokens,
                 softmax_lse_flag);
+        })
+        .def("_dual_split_fused_infer_attention_score_update", [](
+                                                            py::object py_update_stream,
+                                                            c10_npu::NPUTaskGroupHandle handle_0,
+                                                            py::object py_event_0,
+                                                            const at::Tensor& query_0,
+                                                            const at::Tensor& key_0,
+                                                            const at::Tensor& value_0,
+                                                            py::object py_atten_mask_0,
+                                                            py::object py_block_table_0,
+                                                            const std::vector<int64_t>& actual_seq_lengths_0,
+                                                            const std::vector<int64_t>& actual_seq_lengths_kv_0,
+                                                            py::object py_workspace_0,
+                                                            const at::Tensor& attention_out_0,
+                                                            const at::Tensor& softmax_lse_0,
+                                                            int64_t num_heads_0,
+                                                            double scale_0,
+                                                            int64_t block_size_0,
+                                                            int64_t num_key_value_heads_0,
+                                                            int64_t sparse_mode_0,
+                                                            const std::string& input_layout_0,
+                                                            int64_t pre_tokens_0,
+                                                            int64_t next_tokens_0,
+                                                            bool softmax_lse_flag_0,
+                                                            c10_npu::NPUTaskGroupHandle handle_1,
+                                                            py::object py_event_1,
+                                                            const at::Tensor& query_1,
+                                                            const at::Tensor& key_1,
+                                                            const at::Tensor& value_1,
+                                                            py::object py_atten_mask_1,
+                                                            py::object py_block_table_1,
+                                                            const std::vector<int64_t>& actual_seq_lengths_1,
+                                                            const std::vector<int64_t>& actual_seq_lengths_kv_1,
+                                                            py::object py_workspace_1,
+                                                            const at::Tensor& attention_out_1,
+                                                            const at::Tensor& softmax_lse_1,
+                                                            int64_t num_heads_1,
+                                                            double scale_1,
+                                                            int64_t block_size_1,
+                                                            int64_t num_key_value_heads_1,
+                                                            int64_t sparse_mode_1,
+                                                            const std::string& input_layout_1,
+                                                            int64_t pre_tokens_1,
+                                                            int64_t next_tokens_1,
+                                                            bool softmax_lse_flag_1) {
+            auto update_stream = THNPUtils_PyObject_to_NPUStream((*py_update_stream).ptr());
+            auto event_0 = THNPUtils_PyObject_to_NPUEvent((*py_event_0).ptr());
+            auto event_1 = THNPUtils_PyObject_to_NPUEvent((*py_event_1).ptr());
+            auto atten_mask_0 = optional_tensor_from_py_object(py_atten_mask_0);
+            auto block_table_0 = optional_tensor_from_py_object(py_block_table_0);
+            auto workspace_0 = optional_tensor_from_py_object(py_workspace_0);
+            auto atten_mask_1 = optional_tensor_from_py_object(py_atten_mask_1);
+            auto block_table_1 = optional_tensor_from_py_object(py_block_table_1);
+            auto workspace_1 = optional_tensor_from_py_object(py_workspace_1);
+            py::gil_scoped_release no_gil;
+            c10_npu::dual_split_fused_infer_attention_score_update(
+                update_stream,
+                handle_0,
+                event_0,
+                handle_1,
+                event_1,
+                query_0,
+                key_0,
+                value_0,
+                atten_mask_0,
+                block_table_0,
+                actual_seq_lengths_0,
+                actual_seq_lengths_kv_0,
+                workspace_0,
+                attention_out_0,
+                softmax_lse_0,
+                num_heads_0,
+                scale_0,
+                block_size_0,
+                num_key_value_heads_0,
+                sparse_mode_0,
+                input_layout_0,
+                pre_tokens_0,
+                next_tokens_0,
+                softmax_lse_flag_0,
+                query_1,
+                key_1,
+                value_1,
+                atten_mask_1,
+                block_table_1,
+                actual_seq_lengths_1,
+                actual_seq_lengths_kv_1,
+                workspace_1,
+                attention_out_1,
+                softmax_lse_1,
+                num_heads_1,
+                scale_1,
+                block_size_1,
+                num_key_value_heads_1,
+                sparse_mode_1,
+                input_layout_1,
+                pre_tokens_1,
+                next_tokens_1,
+                softmax_lse_flag_1);
+        })
+        .def("_dual_split_fused_infer_attention_score_update_many", [](
+                                                            py::object py_update_stream,
+                                                            py::object py_records) {
+            auto update_stream = THNPUtils_PyObject_to_NPUStream((*py_update_stream).ptr());
+            auto records_seq = require_py_sequence(py_records, "records");
+            std::vector<std::pair<DualSplitFiaUpdateRecord, DualSplitFiaUpdateRecord>> records;
+            records.reserve(records_seq.size());
+            for (py::ssize_t i = 0; i < records_seq.size(); ++i) {
+                auto pair_seq = require_py_sequence(records_seq[i], "record pair");
+                TORCH_CHECK(pair_seq.size() == 2,
+                    "record pair must contain two split records, but got ",
+                    pair_seq.size(), PTA_ERROR(ErrCode::PARAM));
+                records.emplace_back(
+                    parse_dual_split_fia_update_record(pair_seq[0], "split0 record"),
+                    parse_dual_split_fia_update_record(pair_seq[1], "split1 record"));
+            }
+            py::gil_scoped_release no_gil;
+            for (const auto& record_pair : records) {
+                run_dual_split_fia_update_pair(
+                    update_stream, record_pair.first, record_pair.second);
+            }
         })
         .def("_graph_task_group_begin", [](py::object py_stream) {
             auto stream = (*py_stream).ptr();

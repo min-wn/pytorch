@@ -10,6 +10,9 @@ __all__ = [
     "dual_stream_sync_end",
     "dual_fused_infer_attention_score",
     "dual_fused_infer_attention_score_update",
+    "fused_infer_attention_score_update",
+    "dual_split_fused_infer_attention_score_update",
+    "dual_split_fused_infer_attention_score_update_many",
     "NPUGraph",
     "graph",
     "make_graphed_callables",
@@ -51,6 +54,8 @@ if not hasattr(torch_npu._C, "_NPUStreamBase"):
     torch_npu._C.__dict__["_dual_fused_infer_attention_score"] = _dummy_type("_dual_fused_infer_attention_score")
     torch_npu._C.__dict__["_dual_fused_infer_attention_score_update"] = _dummy_type(
         "_dual_fused_infer_attention_score_update")
+    torch_npu._C.__dict__["_npu_fused_infer_attention_score_out_graph"] = _dummy_type(
+        "_npu_fused_infer_attention_score_out_graph")
     torch_npu._C.__dict__["_graph_task_update_begin"] = _dummy_type("_graph_task_update_begin")
     torch_npu._C.__dict__["_graph_task_update_end"] = _dummy_type("_graph_task_update_end")
     torch_npu._C.__dict__["_super_kernel_scope_begin"] = _dummy_type("_super_kernel_scope_begin")
@@ -67,6 +72,7 @@ from torch_npu._C import (  # noqa: F401
     _dual_stream_sync_end,
     _dual_fused_infer_attention_score,
     _dual_fused_infer_attention_score_update,
+    _npu_fused_infer_attention_score_out_graph,
     _graph_task_update_begin,
     _graph_task_update_end,
     _super_kernel_scope_begin,
@@ -284,6 +290,76 @@ def dual_fused_infer_attention_score_update(
         int(pre_tokens),
         int(next_tokens),
         bool(softmax_lse_flag))
+
+
+def fused_infer_attention_score_update(update_stream, handle, event, *args,
+                                       **kwargs):
+    return _npu_fused_infer_attention_score_out_graph(
+        update_stream, handle, event, *args, **kwargs)
+
+
+def _split_fia_update_arg(record, name, default=None):
+    if name in record:
+        return record[name]
+    if default is not None:
+        return default
+    raise ValueError(f"split FIA update record missing {name!r}")
+
+
+def _split_fia_update_args(record):
+    if isinstance(record, tuple):
+        return record
+    if isinstance(record, list):
+        return tuple(record)
+    return (
+        _split_fia_update_arg(record, "handle"),
+        _split_fia_update_arg(record, "event"),
+        _split_fia_update_arg(record, "query"),
+        _split_fia_update_arg(record, "key"),
+        _split_fia_update_arg(record, "value"),
+        record.get("atten_mask"),
+        record.get("block_table"),
+        _as_int_list("actual_seq_lengths",
+                     _split_fia_update_arg(record, "actual_seq_lengths")),
+        _as_int_list("actual_seq_lengths_kv",
+                     _split_fia_update_arg(record, "actual_seq_lengths_kv")),
+        record.get("workspace"),
+        _split_fia_update_arg(record, "attention_out"),
+        _split_fia_update_arg(record, "softmax_lse"),
+        int(record.get("num_heads", 1)),
+        float(record.get("scale", 1.0)),
+        int(record.get("block_size", 0)),
+        int(record.get("num_key_value_heads", 0)),
+        int(record.get("sparse_mode", 3)),
+        str(record.get("input_layout", "TND")),
+        int(record.get("pre_tokens", 2147483647)),
+        int(record.get("next_tokens", 2147483647)),
+        bool(record.get("softmax_lse_flag", False)),
+    )
+
+
+def dual_split_fused_infer_attention_score_update(update_stream, split0,
+                                                  split1):
+    dual_split_update = getattr(
+        torch_npu._C, "_dual_split_fused_infer_attention_score_update", None)
+    if not callable(dual_split_update):
+        raise RuntimeError(
+            "torch_npu._C._dual_split_fused_infer_attention_score_update "
+            "is unavailable")
+    return dual_split_update(update_stream, *_split_fia_update_args(split0),
+                             *_split_fia_update_args(split1))
+
+
+def dual_split_fused_infer_attention_score_update_many(update_stream,
+                                                       records):
+    dual_split_update_many = getattr(
+        torch_npu._C, "_dual_split_fused_infer_attention_score_update_many",
+        None)
+    if not callable(dual_split_update_many):
+        raise RuntimeError(
+            "torch_npu._C._dual_split_fused_infer_attention_score_update_many "
+            "is unavailable")
+    return dual_split_update_many(update_stream, records)
 
 
 def graph_task_update_begin(stream, handle):
