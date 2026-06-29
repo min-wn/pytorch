@@ -13,6 +13,9 @@ __all__ = [
     "fused_infer_attention_score_update",
     "dual_split_fused_infer_attention_score_update",
     "dual_split_fused_infer_attention_score_update_many",
+    "dual_split_fused_infer_attention_score_update_many_parallel",
+    "make_dual_split_fia_update_plan",
+    "dual_split_fia_update_plan_many_parallel",
     "NPUGraph",
     "graph",
     "make_graphed_callables",
@@ -351,7 +354,8 @@ def dual_split_fused_infer_attention_score_update(update_stream, split0,
 
 
 def dual_split_fused_infer_attention_score_update_many(update_stream,
-                                                       records):
+                                                       records,
+                                                       profile=False):
     dual_split_update_many = getattr(
         torch_npu._C, "_dual_split_fused_infer_attention_score_update_many",
         None)
@@ -359,7 +363,42 @@ def dual_split_fused_infer_attention_score_update_many(update_stream,
         raise RuntimeError(
             "torch_npu._C._dual_split_fused_infer_attention_score_update_many "
             "is unavailable")
-    return dual_split_update_many(update_stream, records)
+    return dual_split_update_many(update_stream, records, profile)
+
+
+def dual_split_fused_infer_attention_score_update_many_parallel(
+        update_stream_0, update_stream_1, records, profile=False):
+    dual_split_update_many_parallel = getattr(
+        torch_npu._C,
+        "_dual_split_fused_infer_attention_score_update_many_parallel", None)
+    if not callable(dual_split_update_many_parallel):
+        raise RuntimeError(
+            "torch_npu._C."
+            "_dual_split_fused_infer_attention_score_update_many_parallel "
+            "is unavailable")
+    return dual_split_update_many_parallel(update_stream_0, update_stream_1,
+                                           records, profile)
+
+
+def make_dual_split_fia_update_plan(records):
+    make_plan = getattr(torch_npu._C, "_make_dual_split_fia_update_plan", None)
+    if not callable(make_plan):
+        raise RuntimeError(
+            "torch_npu._C._make_dual_split_fia_update_plan is unavailable")
+    return make_plan(records)
+
+
+def dual_split_fia_update_plan_many_parallel(update_stream_0, update_stream_1,
+                                             plan, runtime_records,
+                                             profile=False):
+    update_plan_many_parallel = getattr(
+        torch_npu._C, "_dual_split_fia_update_plan_many_parallel", None)
+    if not callable(update_plan_many_parallel):
+        raise RuntimeError(
+            "torch_npu._C._dual_split_fia_update_plan_many_parallel "
+            "is unavailable")
+    return update_plan_many_parallel(update_stream_0, update_stream_1, plan,
+                                     runtime_records, profile)
 
 
 def graph_task_update_begin(stream, handle):

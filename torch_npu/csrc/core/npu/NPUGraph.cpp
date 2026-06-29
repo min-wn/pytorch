@@ -415,6 +415,32 @@ void super_kernel_scope_end(const char* scope_name)
     NPU_CHECK_ERROR(c10_npu::skapi::AclskScopeEnd(scope_name, stream));
 }
 
+using FiaUpdateClock = std::chrono::steady_clock;
+
+static uint64_t fia_update_elapsed_ns(
+    const FiaUpdateClock::time_point& start,
+    const FiaUpdateClock::time_point& end)
+{
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count());
+}
+
+static void record_fia_update_event(
+    NPUEvent* event,
+    c10_npu::NPUStream update_stream,
+    FiaUpdateTiming* timing)
+{
+    if (timing == nullptr) {
+        event->record(update_stream);
+        return;
+    }
+    auto start = FiaUpdateClock::now();
+    event->record(update_stream);
+    auto end = FiaUpdateClock::now();
+    timing->event_record_ns += fia_update_elapsed_ns(start, end);
+    timing->event_records += 1;
+}
+
 static void update_fia_task_group(
     c10_npu::NPUStream update_stream,
     NPUTaskGroupHandle handle,
@@ -436,10 +462,22 @@ static void update_fia_task_group(
     const std::string& input_layout,
     int64_t pre_tokens,
     int64_t next_tokens,
-    bool softmax_lse_flag)
+    bool softmax_lse_flag,
+    FiaUpdateTiming* timing = nullptr)
 {
+    FiaUpdateClock::time_point begin_start;
+    if (timing != nullptr) {
+        begin_start = FiaUpdateClock::now();
+    }
     graph_task_update_begin(update_stream, handle);
+    if (timing != nullptr) {
+        timing->update_begin_ns += fia_update_elapsed_ns(begin_start, FiaUpdateClock::now());
+    }
     try {
+        FiaUpdateClock::time_point call_start;
+        if (timing != nullptr) {
+            call_start = FiaUpdateClock::now();
+        }
         call_fia_out(
             query,
             key,
@@ -460,11 +498,28 @@ static void update_fia_task_group(
             pre_tokens,
             next_tokens,
             softmax_lse_flag);
+        if (timing != nullptr) {
+            timing->call_fia_out_ns += fia_update_elapsed_ns(call_start, FiaUpdateClock::now());
+        }
     } catch (...) {
-        graph_task_update_end(update_stream);
+        if (timing != nullptr) {
+            auto end_start = FiaUpdateClock::now();
+            graph_task_update_end(update_stream);
+            timing->update_end_ns += fia_update_elapsed_ns(end_start, FiaUpdateClock::now());
+        } else {
+            graph_task_update_end(update_stream);
+        }
         throw;
     }
+    FiaUpdateClock::time_point end_start;
+    if (timing != nullptr) {
+        end_start = FiaUpdateClock::now();
+    }
     graph_task_update_end(update_stream);
+    if (timing != nullptr) {
+        timing->update_end_ns += fia_update_elapsed_ns(end_start, FiaUpdateClock::now());
+        timing->task_updates += 1;
+    }
 }
 
 void dual_fused_infer_attention_score_update(
@@ -603,7 +658,8 @@ void dual_split_fused_infer_attention_score_update(
     const std::string& input_layout_1,
     int64_t pre_tokens_1,
     int64_t next_tokens_1,
-    bool softmax_lse_flag_1)
+    bool softmax_lse_flag_1,
+    FiaUpdateTiming* timing)
 {
     c10_npu::NPUStreamGuard guard(update_stream);
     update_fia_task_group(
@@ -627,8 +683,9 @@ void dual_split_fused_infer_attention_score_update(
         input_layout_0,
         pre_tokens_0,
         next_tokens_0,
-        softmax_lse_flag_0);
-    event_0->record(update_stream);
+        softmax_lse_flag_0,
+        timing);
+    record_fia_update_event(event_0, update_stream, timing);
     update_fia_task_group(
         update_stream,
         handle_1,
@@ -650,8 +707,61 @@ void dual_split_fused_infer_attention_score_update(
         input_layout_1,
         pre_tokens_1,
         next_tokens_1,
-        softmax_lse_flag_1);
-    event_1->record(update_stream);
+        softmax_lse_flag_1,
+        timing);
+    record_fia_update_event(event_1, update_stream, timing);
+}
+
+void fused_infer_attention_score_update_with_event(
+    c10_npu::NPUStream update_stream,
+    NPUTaskGroupHandle handle,
+    NPUEvent* event,
+    const at::Tensor& query,
+    const at::Tensor& key,
+    const at::Tensor& value,
+    const c10::optional<at::Tensor>& atten_mask,
+    const c10::optional<at::Tensor>& block_table,
+    const std::vector<int64_t>& actual_seq_lengths,
+    const std::vector<int64_t>& actual_seq_lengths_kv,
+    const c10::optional<at::Tensor>& workspace,
+    at::Tensor attention_out,
+    at::Tensor softmax_lse,
+    int64_t num_heads,
+    double scale,
+    int64_t block_size,
+    int64_t num_key_value_heads,
+    int64_t sparse_mode,
+    const std::string& input_layout,
+    int64_t pre_tokens,
+    int64_t next_tokens,
+    bool softmax_lse_flag,
+    FiaUpdateTiming* timing)
+{
+    c10_npu::NPUStreamGuard guard(update_stream);
+    update_fia_task_group(
+        update_stream,
+        handle,
+        query,
+        key,
+        value,
+        atten_mask,
+        block_table,
+        actual_seq_lengths,
+        actual_seq_lengths_kv,
+        workspace,
+        attention_out,
+        softmax_lse,
+        num_heads,
+        scale,
+        block_size,
+        num_key_value_heads,
+        sparse_mode,
+        input_layout,
+        pre_tokens,
+        next_tokens,
+        softmax_lse_flag,
+        timing);
+    record_fia_update_event(event, update_stream, timing);
 }
 
 void launch_callback(c10_npu::NPUStream stream, NPUCallbackFunc func, void *fnData)

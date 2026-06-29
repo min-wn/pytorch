@@ -1,3 +1,7 @@
+#include <chrono>
+#include <exception>
+#include <memory>
+#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -51,6 +55,17 @@ struct DualSplitFiaUpdateRecord {
     bool softmax_lse_flag;
 };
 
+struct DualSplitFiaUpdatePlan {
+    explicit DualSplitFiaUpdatePlan(
+        std::vector<std::pair<DualSplitFiaUpdateRecord, DualSplitFiaUpdateRecord>> records)
+        : records(std::move(records)) {}
+
+    std::vector<std::pair<DualSplitFiaUpdateRecord, DualSplitFiaUpdateRecord>> records;
+};
+
+using DualSplitRuntimeRecord = std::pair<std::vector<int64_t>, std::vector<int64_t>>;
+using DualSplitRuntimeRecordPair = std::pair<DualSplitRuntimeRecord, DualSplitRuntimeRecord>;
+
 py::sequence require_py_sequence(const py::handle& obj, const char* name)
 {
     TORCH_CHECK(PySequence_Check(obj.ptr()), name, " must be a sequence.",
@@ -90,10 +105,75 @@ DualSplitFiaUpdateRecord parse_dual_split_fia_update_record(
         record[20].cast<bool>()};
 }
 
+std::vector<std::pair<DualSplitFiaUpdateRecord, DualSplitFiaUpdateRecord>>
+parse_dual_split_fia_update_records(py::object py_records)
+{
+    auto records_seq = require_py_sequence(py_records, "records");
+    std::vector<std::pair<DualSplitFiaUpdateRecord, DualSplitFiaUpdateRecord>> records;
+    records.reserve(records_seq.size());
+    for (py::ssize_t i = 0; i < records_seq.size(); ++i) {
+        auto pair_seq = require_py_sequence(records_seq[i], "record pair");
+        TORCH_CHECK(pair_seq.size() == 2,
+            "record pair must contain two split records, but got ",
+            pair_seq.size(), PTA_ERROR(ErrCode::PARAM));
+        records.emplace_back(
+            parse_dual_split_fia_update_record(pair_seq[0], "split0 record"),
+            parse_dual_split_fia_update_record(pair_seq[1], "split1 record"));
+    }
+    return records;
+}
+
+std::vector<int64_t> parse_int64_vector(
+    const py::handle& obj,
+    const char* name)
+{
+    TORCH_CHECK(!obj.is_none(), name, " must not be None.",
+        PTA_ERROR(ErrCode::PARAM));
+    return obj.cast<std::vector<int64_t>>();
+}
+
+std::vector<DualSplitRuntimeRecordPair> parse_dual_split_runtime_records(
+    py::object py_runtime_records,
+    size_t expected_size)
+{
+    auto runtime_seq = require_py_sequence(py_runtime_records, "runtime_records");
+    TORCH_CHECK(static_cast<size_t>(runtime_seq.size()) == expected_size,
+        "runtime_records size must match plan record pairs. expected ",
+        expected_size, ", got ", runtime_seq.size(),
+        PTA_ERROR(ErrCode::PARAM));
+    std::vector<DualSplitRuntimeRecordPair> runtime_records;
+    runtime_records.reserve(runtime_seq.size());
+    for (py::ssize_t i = 0; i < runtime_seq.size(); ++i) {
+        auto pair_seq = require_py_sequence(runtime_seq[i], "runtime record pair");
+        TORCH_CHECK(pair_seq.size() == 2,
+            "runtime record pair must contain two split runtime records, but got ",
+            pair_seq.size(), PTA_ERROR(ErrCode::PARAM));
+        auto split0_seq = require_py_sequence(pair_seq[0], "split0 runtime record");
+        auto split1_seq = require_py_sequence(pair_seq[1], "split1 runtime record");
+        TORCH_CHECK(split0_seq.size() == 2,
+            "split0 runtime record must contain actual_seq_lengths and "
+            "actual_seq_lengths_kv, but got ", split0_seq.size(),
+            PTA_ERROR(ErrCode::PARAM));
+        TORCH_CHECK(split1_seq.size() == 2,
+            "split1 runtime record must contain actual_seq_lengths and "
+            "actual_seq_lengths_kv, but got ", split1_seq.size(),
+            PTA_ERROR(ErrCode::PARAM));
+        runtime_records.emplace_back(
+            std::make_pair(
+                parse_int64_vector(split0_seq[0], "split0 actual_seq_lengths"),
+                parse_int64_vector(split0_seq[1], "split0 actual_seq_lengths_kv")),
+            std::make_pair(
+                parse_int64_vector(split1_seq[0], "split1 actual_seq_lengths"),
+                parse_int64_vector(split1_seq[1], "split1 actual_seq_lengths_kv")));
+    }
+    return runtime_records;
+}
+
 void run_dual_split_fia_update_pair(
     const c10_npu::NPUStream& update_stream,
     const DualSplitFiaUpdateRecord& first,
-    const DualSplitFiaUpdateRecord& second)
+    const DualSplitFiaUpdateRecord& second,
+    c10_npu::FiaUpdateTiming* timing = nullptr)
 {
     c10_npu::dual_split_fused_infer_attention_score_update(
         update_stream,
@@ -138,7 +218,116 @@ void run_dual_split_fia_update_pair(
         second.input_layout,
         second.pre_tokens,
         second.next_tokens,
-        second.softmax_lse_flag);
+        second.softmax_lse_flag,
+        timing);
+}
+
+void run_fia_update_record_with_seq_lengths(
+    const c10_npu::NPUStream& update_stream,
+    const DualSplitFiaUpdateRecord& record,
+    const std::vector<int64_t>& actual_seq_lengths,
+    const std::vector<int64_t>& actual_seq_lengths_kv,
+    c10_npu::FiaUpdateTiming* timing = nullptr)
+{
+    c10_npu::fused_infer_attention_score_update_with_event(
+        update_stream,
+        record.handle,
+        record.event,
+        record.query,
+        record.key,
+        record.value,
+        record.atten_mask,
+        record.block_table,
+        actual_seq_lengths,
+        actual_seq_lengths_kv,
+        record.workspace,
+        record.attention_out,
+        record.softmax_lse,
+        record.num_heads,
+        record.scale,
+        record.block_size,
+        record.num_key_value_heads,
+        record.sparse_mode,
+        record.input_layout,
+        record.pre_tokens,
+        record.next_tokens,
+        record.softmax_lse_flag,
+        timing);
+}
+
+void run_fia_update_record(
+    const c10_npu::NPUStream& update_stream,
+    const DualSplitFiaUpdateRecord& record,
+    c10_npu::FiaUpdateTiming* timing = nullptr)
+{
+    c10_npu::fused_infer_attention_score_update_with_event(
+        update_stream,
+        record.handle,
+        record.event,
+        record.query,
+        record.key,
+        record.value,
+        record.atten_mask,
+        record.block_table,
+        record.actual_seq_lengths,
+        record.actual_seq_lengths_kv,
+        record.workspace,
+        record.attention_out,
+        record.softmax_lse,
+        record.num_heads,
+        record.scale,
+        record.block_size,
+        record.num_key_value_heads,
+        record.sparse_mode,
+        record.input_layout,
+        record.pre_tokens,
+        record.next_tokens,
+        record.softmax_lse_flag,
+        timing);
+}
+
+using FiaProfileClock = std::chrono::steady_clock;
+
+uint64_t elapsed_ns(
+    const FiaProfileClock::time_point& start,
+    const FiaProfileClock::time_point& end)
+{
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count());
+}
+
+double ns_to_ms(uint64_t ns)
+{
+    return static_cast<double>(ns) / 1000000.0;
+}
+
+void add_timing_fields(
+    py::dict& result,
+    const std::string& prefix,
+    const c10_npu::FiaUpdateTiming& timing,
+    uint64_t wall_ns)
+{
+    result[py::str(prefix + "wall_ms")] = ns_to_ms(wall_ns);
+    result[py::str(prefix + "update_begin_ms")] = ns_to_ms(timing.update_begin_ns);
+    result[py::str(prefix + "call_fia_out_ms")] = ns_to_ms(timing.call_fia_out_ns);
+    result[py::str(prefix + "update_end_ms")] = ns_to_ms(timing.update_end_ns);
+    result[py::str(prefix + "event_record_ms")] = ns_to_ms(timing.event_record_ns);
+    result[py::str(prefix + "task_updates")] = timing.task_updates;
+    result[py::str(prefix + "event_records")] = timing.event_records;
+}
+
+c10_npu::FiaUpdateTiming sum_timing(
+    const c10_npu::FiaUpdateTiming& first,
+    const c10_npu::FiaUpdateTiming& second)
+{
+    c10_npu::FiaUpdateTiming total;
+    total.update_begin_ns = first.update_begin_ns + second.update_begin_ns;
+    total.call_fia_out_ns = first.call_fia_out_ns + second.call_fia_out_ns;
+    total.update_end_ns = first.update_end_ns + second.update_end_ns;
+    total.event_record_ns = first.event_record_ns + second.event_record_ns;
+    total.task_updates = first.task_updates + second.task_updates;
+    total.event_records = first.event_records + second.event_records;
+    return total;
 }
 
 void *process_callback(void *arg)
@@ -262,6 +451,10 @@ void TORCH_NPU_API THNPGraph_init(PyObject* module) {
             .def_readonly("secondary", &c10_npu::DualTaskGroupHandle::secondary);
 
     shared_ptr_class_<c10_npu::DualStreamSyncHandle>(torch_N_m, "_DualStreamSyncHandle");
+    shared_ptr_class_<DualSplitFiaUpdatePlan>(torch_N_m, "_DualSplitFiaUpdatePlan")
+            .def_property_readonly("num_record_pairs", [](const DualSplitFiaUpdatePlan& self) {
+                return self.records.size();
+            });
 
     torch_N_m.def("_graph_pool_handle", &c10_npu::graph_pool_handle)
         .def("_make_dual_task_group_handle", &c10_npu::make_dual_task_group_handle)
@@ -527,26 +720,208 @@ void TORCH_NPU_API THNPGraph_init(PyObject* module) {
         })
         .def("_dual_split_fused_infer_attention_score_update_many", [](
                                                             py::object py_update_stream,
-                                                            py::object py_records) {
+                                                            py::object py_records,
+                                                            bool profile) -> py::object {
             auto update_stream = THNPUtils_PyObject_to_NPUStream((*py_update_stream).ptr());
-            auto records_seq = require_py_sequence(py_records, "records");
-            std::vector<std::pair<DualSplitFiaUpdateRecord, DualSplitFiaUpdateRecord>> records;
-            records.reserve(records_seq.size());
-            for (py::ssize_t i = 0; i < records_seq.size(); ++i) {
-                auto pair_seq = require_py_sequence(records_seq[i], "record pair");
-                TORCH_CHECK(pair_seq.size() == 2,
-                    "record pair must contain two split records, but got ",
-                    pair_seq.size(), PTA_ERROR(ErrCode::PARAM));
-                records.emplace_back(
-                    parse_dual_split_fia_update_record(pair_seq[0], "split0 record"),
-                    parse_dual_split_fia_update_record(pair_seq[1], "split1 record"));
+            auto records = parse_dual_split_fia_update_records(py_records);
+            c10_npu::FiaUpdateTiming timing;
+            uint64_t wall_ns = 0;
+            {
+                py::gil_scoped_release no_gil;
+                auto wall_start = FiaProfileClock::now();
+                for (const auto& record_pair : records) {
+                    run_dual_split_fia_update_pair(
+                        update_stream, record_pair.first, record_pair.second,
+                        profile ? &timing : nullptr);
+                }
+                wall_ns = elapsed_ns(wall_start, FiaProfileClock::now());
             }
-            py::gil_scoped_release no_gil;
-            for (const auto& record_pair : records) {
-                run_dual_split_fia_update_pair(
-                    update_stream, record_pair.first, record_pair.second);
+            if (!profile) {
+                return py::none();
             }
-        })
+            py::dict result;
+            result["cpp_profile_calls"] = 1;
+            result["cpp_parallel_mode"] = 0;
+            result["cpp_record_pairs"] = records.size();
+            add_timing_fields(result, "cpp_", timing, wall_ns);
+            return std::move(result);
+        }, py::arg("update_stream"), py::arg("records"), py::arg("profile") = false)
+        .def("_dual_split_fused_infer_attention_score_update_many_parallel", [](
+                                                            py::object py_update_stream_0,
+                                                            py::object py_update_stream_1,
+                                                            py::object py_records,
+                                                            bool profile) -> py::object {
+            auto update_stream_0 = THNPUtils_PyObject_to_NPUStream((*py_update_stream_0).ptr());
+            auto update_stream_1 = THNPUtils_PyObject_to_NPUStream((*py_update_stream_1).ptr());
+            auto records = parse_dual_split_fia_update_records(py_records);
+            if (records.empty()) {
+                if (!profile) {
+                    return py::none();
+                }
+                c10_npu::FiaUpdateTiming empty_timing;
+                py::dict result;
+                result["cpp_profile_calls"] = 1;
+                result["cpp_parallel_mode"] = 1;
+                result["cpp_record_pairs"] = 0;
+                add_timing_fields(result, "cpp_", empty_timing, 0);
+                add_timing_fields(result, "cpp_split0_", empty_timing, 0);
+                add_timing_fields(result, "cpp_split1_", empty_timing, 0);
+                return std::move(result);
+            }
+            c10_npu::FiaUpdateTiming split0_timing;
+            c10_npu::FiaUpdateTiming split1_timing;
+            uint64_t split0_wall_ns = 0;
+            uint64_t split1_wall_ns = 0;
+            uint64_t wall_ns = 0;
+            std::exception_ptr split0_error = nullptr;
+            std::exception_ptr split1_error = nullptr;
+            {
+                py::gil_scoped_release no_gil;
+                auto wall_start = FiaProfileClock::now();
+                std::thread split1_worker([&]() {
+                    try {
+                        auto split_wall_start = FiaProfileClock::now();
+                        for (const auto& record_pair : records) {
+                            run_fia_update_record(
+                                update_stream_1, record_pair.second,
+                                profile ? &split1_timing : nullptr);
+                        }
+                        split1_wall_ns = elapsed_ns(split_wall_start, FiaProfileClock::now());
+                    } catch (...) {
+                        split1_error = std::current_exception();
+                    }
+                });
+                try {
+                    auto split_wall_start = FiaProfileClock::now();
+                    for (const auto& record_pair : records) {
+                        run_fia_update_record(
+                            update_stream_0, record_pair.first,
+                            profile ? &split0_timing : nullptr);
+                    }
+                    split0_wall_ns = elapsed_ns(split_wall_start, FiaProfileClock::now());
+                } catch (...) {
+                    split0_error = std::current_exception();
+                }
+                split1_worker.join();
+                wall_ns = elapsed_ns(wall_start, FiaProfileClock::now());
+            }
+            if (split0_error != nullptr) {
+                std::rethrow_exception(split0_error);
+            }
+            if (split1_error != nullptr) {
+                std::rethrow_exception(split1_error);
+            }
+            if (!profile) {
+                return py::none();
+            }
+            auto total_timing = sum_timing(split0_timing, split1_timing);
+            py::dict result;
+            result["cpp_profile_calls"] = 1;
+            result["cpp_parallel_mode"] = 1;
+            result["cpp_record_pairs"] = records.size();
+            add_timing_fields(result, "cpp_", total_timing, wall_ns);
+            add_timing_fields(result, "cpp_split0_", split0_timing, split0_wall_ns);
+            add_timing_fields(result, "cpp_split1_", split1_timing, split1_wall_ns);
+            return std::move(result);
+        }, py::arg("update_stream_0"), py::arg("update_stream_1"),
+           py::arg("records"), py::arg("profile") = false)
+        .def("_make_dual_split_fia_update_plan", [](
+                                                            py::object py_records) {
+            auto records = parse_dual_split_fia_update_records(py_records);
+            return std::make_shared<DualSplitFiaUpdatePlan>(std::move(records));
+        }, py::arg("records"))
+        .def("_dual_split_fia_update_plan_many_parallel", [](
+                                                            py::object py_update_stream_0,
+                                                            py::object py_update_stream_1,
+                                                            const std::shared_ptr<DualSplitFiaUpdatePlan>& plan,
+                                                            py::object py_runtime_records,
+                                                            bool profile) -> py::object {
+            TORCH_CHECK(plan != nullptr, "dual split FIA update plan is null.",
+                PTA_ERROR(ErrCode::PARAM));
+            auto update_stream_0 = THNPUtils_PyObject_to_NPUStream((*py_update_stream_0).ptr());
+            auto update_stream_1 = THNPUtils_PyObject_to_NPUStream((*py_update_stream_1).ptr());
+            auto runtime_records = parse_dual_split_runtime_records(
+                py_runtime_records, plan->records.size());
+            if (plan->records.empty()) {
+                if (!profile) {
+                    return py::none();
+                }
+                c10_npu::FiaUpdateTiming empty_timing;
+                py::dict result;
+                result["cpp_profile_calls"] = 1;
+                result["cpp_parallel_mode"] = 1;
+                result["cpp_plan_cache"] = 1;
+                result["cpp_record_pairs"] = 0;
+                add_timing_fields(result, "cpp_", empty_timing, 0);
+                add_timing_fields(result, "cpp_split0_", empty_timing, 0);
+                add_timing_fields(result, "cpp_split1_", empty_timing, 0);
+                return std::move(result);
+            }
+            c10_npu::FiaUpdateTiming split0_timing;
+            c10_npu::FiaUpdateTiming split1_timing;
+            uint64_t split0_wall_ns = 0;
+            uint64_t split1_wall_ns = 0;
+            uint64_t wall_ns = 0;
+            std::exception_ptr split0_error = nullptr;
+            std::exception_ptr split1_error = nullptr;
+            {
+                py::gil_scoped_release no_gil;
+                auto wall_start = FiaProfileClock::now();
+                std::thread split1_worker([&]() {
+                    try {
+                        auto split_wall_start = FiaProfileClock::now();
+                        for (size_t i = 0; i < plan->records.size(); ++i) {
+                            run_fia_update_record_with_seq_lengths(
+                                update_stream_1,
+                                plan->records[i].second,
+                                runtime_records[i].second.first,
+                                runtime_records[i].second.second,
+                                profile ? &split1_timing : nullptr);
+                        }
+                        split1_wall_ns = elapsed_ns(split_wall_start, FiaProfileClock::now());
+                    } catch (...) {
+                        split1_error = std::current_exception();
+                    }
+                });
+                try {
+                    auto split_wall_start = FiaProfileClock::now();
+                    for (size_t i = 0; i < plan->records.size(); ++i) {
+                        run_fia_update_record_with_seq_lengths(
+                            update_stream_0,
+                            plan->records[i].first,
+                            runtime_records[i].first.first,
+                            runtime_records[i].first.second,
+                            profile ? &split0_timing : nullptr);
+                    }
+                    split0_wall_ns = elapsed_ns(split_wall_start, FiaProfileClock::now());
+                } catch (...) {
+                    split0_error = std::current_exception();
+                }
+                split1_worker.join();
+                wall_ns = elapsed_ns(wall_start, FiaProfileClock::now());
+            }
+            if (split0_error != nullptr) {
+                std::rethrow_exception(split0_error);
+            }
+            if (split1_error != nullptr) {
+                std::rethrow_exception(split1_error);
+            }
+            if (!profile) {
+                return py::none();
+            }
+            auto total_timing = sum_timing(split0_timing, split1_timing);
+            py::dict result;
+            result["cpp_profile_calls"] = 1;
+            result["cpp_parallel_mode"] = 1;
+            result["cpp_plan_cache"] = 1;
+            result["cpp_record_pairs"] = plan->records.size();
+            add_timing_fields(result, "cpp_", total_timing, wall_ns);
+            add_timing_fields(result, "cpp_split0_", split0_timing, split0_wall_ns);
+            add_timing_fields(result, "cpp_split1_", split1_timing, split1_wall_ns);
+            return std::move(result);
+        }, py::arg("update_stream_0"), py::arg("update_stream_1"),
+           py::arg("plan"), py::arg("runtime_records"),
+           py::arg("profile") = false)
         .def("_graph_task_group_begin", [](py::object py_stream) {
             auto stream = (*py_stream).ptr();
             c10_npu::graph_task_group_begin(THNPUtils_PyObject_to_NPUStream(stream));

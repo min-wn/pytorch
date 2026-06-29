@@ -4,6 +4,7 @@
 #include <c10/core/Device.h>
 #include <c10/util/flat_hash_map.h>
 #include <c10/util/Optional.h>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <tuple>
@@ -38,6 +39,15 @@ struct TORCH_NPU_API NPUTaskGroupHandle {
 struct TORCH_NPU_API DualTaskGroupHandle {
     NPUTaskGroupHandle primary;
     NPUTaskGroupHandle secondary;
+};
+
+struct TORCH_NPU_API FiaUpdateTiming {
+    uint64_t update_begin_ns = 0;
+    uint64_t call_fia_out_ns = 0;
+    uint64_t update_end_ns = 0;
+    uint64_t event_record_ns = 0;
+    uint64_t task_updates = 0;
+    uint64_t event_records = 0;
 };
 
 struct TORCH_NPU_API DualStreamSyncHandle {
@@ -168,7 +178,32 @@ TORCH_NPU_API void dual_split_fused_infer_attention_score_update(
     const std::string& input_layout_1,
     int64_t pre_tokens_1,
     int64_t next_tokens_1,
-    bool softmax_lse_flag_1);
+    bool softmax_lse_flag_1,
+    FiaUpdateTiming* timing = nullptr);
+TORCH_NPU_API void fused_infer_attention_score_update_with_event(
+    c10_npu::NPUStream update_stream,
+    NPUTaskGroupHandle handle,
+    NPUEvent* event,
+    const at::Tensor& query,
+    const at::Tensor& key,
+    const at::Tensor& value,
+    const c10::optional<at::Tensor>& atten_mask,
+    const c10::optional<at::Tensor>& block_table,
+    const std::vector<int64_t>& actual_seq_lengths,
+    const std::vector<int64_t>& actual_seq_lengths_kv,
+    const c10::optional<at::Tensor>& workspace,
+    at::Tensor attention_out,
+    at::Tensor softmax_lse,
+    int64_t num_heads,
+    double scale,
+    int64_t block_size,
+    int64_t num_key_value_heads,
+    int64_t sparse_mode,
+    const std::string& input_layout,
+    int64_t pre_tokens,
+    int64_t next_tokens,
+    bool softmax_lse_flag,
+    FiaUpdateTiming* timing = nullptr);
 TORCH_NPU_API void graph_task_group_begin(c10_npu::NPUStream stream);
 TORCH_NPU_API NPUTaskGroupHandle graph_task_group_end(c10_npu::NPUStream stream);
 TORCH_NPU_API void graph_task_update_begin(c10_npu::NPUStream stream, NPUTaskGroupHandle handle);
